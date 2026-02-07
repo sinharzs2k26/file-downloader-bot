@@ -5,14 +5,17 @@ import requests
 import asyncio
 import mimetypes
 import tempfile
+import time
 from urllib.parse import urlparse, unquote
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict
 from datetime import datetime
+import random
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 from telegram import Update, InputFile
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 
 # Configure logging
 logging.basicConfig(
@@ -23,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Configuration - Get from Environment Variables (for Render.com)
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
+PORT = int(os.environ.get('PORT', 10000))  # Render.com provides PORT
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB Telegram limit
 ALLOWED_EXTENSIONS = {
     '.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm',
@@ -36,6 +40,7 @@ ALLOWED_EXTENSIONS = {
 class TelegramDownloadBot:
     def __init__(self):
         self.active_downloads = {}
+        self.download_progress = {}  # Track last progress to avoid duplicate updates
         self.temp_dir = tempfile.mkdtemp(prefix="tg_downloads_")
         logger.info(f"Created temp directory: {self.temp_dir}")
         
@@ -101,11 +106,20 @@ class TelegramDownloadBot:
     def get_file_info(self, url: str) -> Tuple[Optional[int], Optional[str]]:
         """Get file size and type from URL headers"""
         try:
-            response = requests.head(url, allow_redirects=True, timeout=10)
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            response = requests.head(url, headers=headers, allow_redirects=True, timeout=10)
             response.raise_for_status()
             
             size = int(response.headers.get('content-length', 0))
             content_type = response.headers.get('content-type', '')
+            
+            # If HEAD doesn't give size, try GET with range
+            if size == 0:
+                response = requests.get(url, headers=headers, stream=True, timeout=5)
+                size = int(response.headers.get('content-length', 0))
+                content_type = response.headers.get('content-type', content_type)
             
             return size, content_type
         except Exception as e:
@@ -127,6 +141,10 @@ class TelegramDownloadBot:
         """Check if file extension is allowed"""
         _, ext = os.path.splitext(filename.lower())
         return ext in ALLOWED_EXTENSIONS or ext == ''  # Allow files without extension
+    
+    def generate_progress_key(self, user_id: int, filename: str) -> str:
+        """Generate a unique key for tracking progress"""
+        return f"{user_id}_{filename}"
     
     # ===== Bot Command Handlers =====
     
@@ -166,7 +184,7 @@ Just send me a link to get started!
     
     async def help_command(self, update: Update, context: CallbackContext):
         """Handle /help command"""
-        help_text = """
+        help_text = f"""
 📚 Help Guide
 
 What I can download:
@@ -181,18 +199,18 @@ How to use:
 3. I'll handle the rest!
 
 File size limits:
-• Maximum: {max_size} (Telegram Bot API limit)
+• Maximum: {self.format_size(MAX_FILE_SIZE)} (Telegram Bot API limit)
 • Larger files will be rejected automatically
 
 Troubleshooting:
 ❌ "Invalid URL" - Make sure it starts with http:// or https://
-❌ "File too large" - File exceeds {max_size}
+❌ "File too large" - File exceeds {self.format_size(MAX_FILE_SIZE)}
 ❌ "Download failed" - Server might be blocking bots or link is broken
 ❌ "Unsupported file" - File type not in allowed list
 
 Need help?
 Just send me a link and I'll try to download it!
-        """.format(max_size=self.format_size(MAX_FILE_SIZE))
+        """
         
         await update.message.reply_text(help_text)
     
@@ -203,6 +221,10 @@ Just send me a link and I'll try to download it!
         if user_id in self.active_downloads:
             filename = self.active_downloads[user_id]
             del self.active_downloads[user_id]
+            # Clean up progress tracking
+            progress_key = self.generate_progress_key(user_id, filename)
+            if progress_key in self.download_progress:
+                del self.download_progress[progress_key]
             await update.message.reply_text(f"✅ Cancelled download: {filename}")
         else:
             await update.message.reply_text("📭 No active download to cancel.")
@@ -286,14 +308,23 @@ Storage:
             
             # Start download
             self.active_downloads[user_id] = filename
+            progress_key = self.generate_progress_key(user_id, filename)
+            self.download_progress[progress_key] = {
+                'last_update': 0,
+                'last_percentage': 0,
+                'last_size': 0
+            }
+            
             filepath = os.path.join(self.temp_dir, filename)
             
             # Download with progress
-            success = await self.download_file_with_progress(url, filepath, status_msg, filename)
+            success = await self.download_file_with_progress(url, filepath, status_msg, user_id, filename)
             
             if not success:
                 if user_id in self.active_downloads:
                     del self.active_downloads[user_id]
+                if progress_key in self.download_progress:
+                    del self.download_progress[progress_key]
                 return
             
             # Send file to user
@@ -302,6 +333,8 @@ Storage:
             # Clean up
             if user_id in self.active_downloads:
                 del self.active_downloads[user_id]
+            if progress_key in self.download_progress:
+                del self.download_progress[progress_key]
             if os.path.exists(filepath):
                 os.remove(filepath)
             
@@ -310,17 +343,28 @@ Storage:
             await status_msg.edit_text(f"❌ Error\n"
                                      f"\n{str(e)[:200]}\n\n"
                                      f"\nPlease try again or use a different link.")
+            user_id = update.effective_user.id
             if user_id in self.active_downloads:
+                filename = self.active_downloads[user_id]
                 del self.active_downloads[user_id]
+                progress_key = self.generate_progress_key(user_id, filename)
+                if progress_key in self.download_progress:
+                    del self.download_progress[progress_key]
     
-    async def download_file_with_progress(self, url: str, filepath: str, status_msg, filename: str) -> bool:
-        """Download file with progress updates"""
+    async def download_file_with_progress(self, url: str, filepath: str, status_msg, user_id: int, filename: str) -> bool:
+        """Download file with smart progress updates (fixes 'Message is not modified' error)"""
         try:
-            response = requests.get(url, stream=True, timeout=30)
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            response = requests.get(url, headers=headers, stream=True, timeout=30)
             response.raise_for_status()
             
             total_size = int(response.headers.get('content-length', 0))
             downloaded = 0
+            start_time = time.time()
+            
+            progress_key = self.generate_progress_key(user_id, filename)
             
             with open(filepath, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
@@ -328,24 +372,86 @@ Storage:
                         f.write(chunk)
                         downloaded += len(chunk)
                         
-                        # Update progress every 5% or 5MB
+                        # Calculate progress
                         if total_size > 0:
-                            progress = (downloaded / total_size) * 100
-                            if int(progress) % 5 == 0 or downloaded % (5 * 1024 * 1024) == 0:
+                            progress_percent = (downloaded / total_size) * 100
+                            
+                            # Get progress tracking info
+                            progress_info = self.download_progress.get(progress_key, {
+                                'last_update': 0,
+                                'last_percentage': 0,
+                                'last_size': 0
+                            })
+                            
+                            # Calculate download speed
+                            elapsed_time = time.time() - start_time
+                            if elapsed_time > 0:
+                                speed = downloaded / elapsed_time  # bytes per second
+                                speed_str = self.format_size(speed) + "/s"
+                            else:
+                                speed_str = "N/A"
+                            
+                            # Update message only if:
+                            # 1. Progress changed by at least 1% OR
+                            # 2. At least 1MB downloaded since last update OR
+                            # 3. At least 2 seconds passed since last update
+                            should_update = (
+                                abs(progress_percent - progress_info['last_percentage']) >= 1 or
+                                (downloaded - progress_info['last_size']) >= (1024 * 1024) or
+                                (time.time() - progress_info['last_update']) >= 2
+                            )
+                            
+                            if should_update and total_size > 0:
                                 downloaded_fmt = self.format_size(downloaded)
                                 total_fmt = self.format_size(total_size)
                                 
-                                # Create progress bar
-                                bars = int(progress / 5)
+                                # Create progress bar (20 characters)
+                                bars = int(progress_percent / 5)
                                 progress_bar = "▓" * bars + "░" * (20 - bars)
                                 
-                                await status_msg.edit_text(
+                                # ETA calculation
+                                if progress_percent > 0 and elapsed_time > 0:
+                                    total_time = elapsed_time * (100 / progress_percent)
+                                    remaining_time = total_time - elapsed_time
+                                    if remaining_time < 60:
+                                        eta_str = f"{int(remaining_time)}s"
+                                    elif remaining_time < 3600:
+                                        eta_str = f"{int(remaining_time/60)}m {int(remaining_time%60)}s"
+                                    else:
+                                        eta_str = f"{int(remaining_time/3600)}h {int((remaining_time%3600)/60)}m"
+                                else:
+                                    eta_str = "Calculating..."
+                                
+                                message_text = (
                                     f"⬇️ Downloading...\n"
                                     f"File: {filename}\n"
-                                    f"Progress: {progress:.1f}%\n"
+                                    f"Progress: {progress_percent:.1f}%\n"
                                     f"[{progress_bar}]\n"
-                                    f"{downloaded_fmt} / {total_fmt}"
+                                    f"{downloaded_fmt} / {total_fmt}\n"
+                                    f"Speed: {speed_str}\n"
+                                    f"ETA: {eta_str}"
                                 )
+                                
+                                try:
+                                    await status_msg.edit_text(message_text)
+                                    
+                                    # Update progress tracking
+                                    self.download_progress[progress_key] = {
+                                        'last_update': time.time(),
+                                        'last_percentage': progress_percent,
+                                        'last_size': downloaded
+                                    }
+                                    
+                                except BadRequest as e:
+                                    if "Message is not modified" in str(e):
+                                        # This is okay, just update the tracking without editing
+                                        self.download_progress[progress_key] = {
+                                            'last_update': time.time(),
+                                            'last_percentage': progress_percent,
+                                            'last_size': downloaded
+                                        }
+                                    else:
+                                        raise
             
             return True
             
@@ -385,7 +491,7 @@ Storage:
                 if mime_type and mime_type.startswith('video/'):
                     await update.message.reply_video(
                         video=InputFile(file, filename=filename),
-                        caption=f"🎬 {filename}",
+                        caption=f"🎬 {filename}"
                         supports_streaming=True
                     )
                 elif mime_type and mime_type.startswith('image/'):
@@ -408,9 +514,18 @@ Storage:
             
         except Exception as e:
             logger.error(f"Error sending file: {e}")
-            await status_msg.edit_text(f"❌ Upload Failed\n"
-                                     f"Error: {str(e)[:100]}\n"
-                                     f"\nFile might be too large or format not supported.")
+            # Try to send as document if specific type fails
+            try:
+                with open(filepath, 'rb') as file:
+                    await update.message.reply_document(
+                        document=InputFile(file, filename=filename),
+                        caption=f"📁 {filename}",
+                    )
+                await status_msg.delete()
+            except Exception as e2:
+                await status_msg.edit_text(f"❌ Upload Failed\n"
+                                         f"Error: {str(e2)[:100]}\n"
+                                         f"\nFile might be too large or format not supported.")
     
     async def cleanup_temp_files(self):
         """Clean up temporary files periodically"""
@@ -448,18 +563,15 @@ Storage:
         # Error handler
         async def error_handler(update: Update, context: CallbackContext):
             logger.error(f"Update {update} caused error {context.error}")
-        
+            
         application.add_error_handler(error_handler)
     
     def run_polling(self):
-        """Run bot with polling"""
+        """Run bot with polling (for local testing)"""
         application = Application.builder().token(BOT_TOKEN).build()
         self.setup_handlers(application)
         logger.info("Starting bot in polling mode...")
-        application.run_polling(
-            drop_pending_updates=True,
-            allowed_updates=Update.ALL_TYPES
-           )
+        application.run_polling()
 
 # ===== Main Execution =====
 
@@ -486,26 +598,27 @@ def main():
 📊 Config:
 • Max file size: {MAX_FILE_SIZE / (1024*1024):.0f}MB
 • Temp directory: {tempfile.gettempdir()}
+• Port: {PORT}
     
 Starting bot...
     """)
-    
+    # Create health server
     class HealthHandler(BaseHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200)
             self.send_header('Content-type', 'text/plain')
             self.end_headers()
             self.wfile.write(b'Bot is alive!')
-        
+
         def log_message(self, format, *args):
             pass  # Silence logs
 
     def run_health_server():
-        port = int(os.environ.get("PORT", 10000))
+        port = PORT
         httpd = HTTPServer(('0.0.0.0', port), HealthHandler)
         logger.info(f"✅ Health server on port {port}")
         httpd.serve_forever()
-    
+
     # Start health server
     health_thread = threading.Thread(target=run_health_server, daemon=True)
     health_thread.start()
