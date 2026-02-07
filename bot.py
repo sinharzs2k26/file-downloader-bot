@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-Telegram Download Manager Bot
-Single file implementation for Render.com
-"""
-
 import os
 import re
 import logging
@@ -27,10 +21,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration - Get from Environment Variables (for Render.com)
-BOT_TOKEN = os.environ.get('BOT_TOKEN', '')
-PORT = int(os.environ.get('PORT', 10000))  # Render.com provides PORT
-WEBHOOK_URL = os.environ.get('WEBHOOK_URL', '')  # Set in Render.com environment
-MAX_FILE_SIZE = 100 * 1024 * 1024  # 50MB Telegram limit
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB Telegram limit
 ALLOWED_EXTENSIONS = {
     '.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm',
     '.mp3', '.wav', '.ogg', '.m4a', '.flac',
@@ -141,15 +133,15 @@ class TelegramDownloadBot:
         """Handle /start command"""
         user = update.effective_user
         welcome_text = f"""
-🤖 *Welcome {user.first_name}!*
+🤖 Welcome {user.first_name}!
 
 I'm your personal download assistant. I can download files from direct links and send them to you.
 
-*How to use:*
+How to use:
 1. Send me any direct download link (HTTP/HTTPS)
 2. I'll download it and send it back to you
 
-*Supported files:*
+Supported files:
 • Videos (MP4, AVI, MKV, etc.)
 • Documents (PDF, DOC, XLS, PPT, etc.)
 • Archives (ZIP, RAR, 7Z, etc.)
@@ -157,51 +149,51 @@ I'm your personal download assistant. I can download files from direct links and
 • Audio (MP3, WAV, etc.)
 • Apps (APK, EXE, DMG, etc.)
 
-*Limits:*
+Limits:
 • Max file size: {self.format_size(MAX_FILE_SIZE)} (Telegram limit)
 • Direct links only (no streaming sites)
 
-*Commands:*
+Commands:
 /start - Show this message
 /help - Detailed help
 /cancel - Cancel current download
 /status - Bot status
 
-*Just send me a link to get started!*
+Just send me a link to get started!
         """
-        await update.message.reply_text(welcome_text, parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(welcome_text)
     
     async def help_command(self, update: Update, context: CallbackContext):
         """Handle /help command"""
         help_text = """
-📚 *Help Guide*
+📚 Help Guide
 
-*What I can download:*
+What I can download:
 Any file accessible via a direct HTTP/HTTPS link. The link should end with a filename like:
 • https://example.com/files/video.mp4
 • https://cdn.example.com/document.pdf
 • https://download.example.com/app.zip
 
-*How to use:*
+How to use:
 1. Copy a direct download link
 2. Paste it here
 3. I'll handle the rest!
 
-*File size limits:*
+File size limits:
 • Maximum: {max_size} (Telegram Bot API limit)
 • Larger files will be rejected automatically
 
-*Troubleshooting:*
+Troubleshooting:
 ❌ "Invalid URL" - Make sure it starts with http:// or https://
 ❌ "File too large" - File exceeds {max_size}
 ❌ "Download failed" - Server might be blocking bots or link is broken
 ❌ "Unsupported file" - File type not in allowed list
 
-*Need help?*
+Need help?
 Just send me a link and I'll try to download it!
         """.format(max_size=self.format_size(MAX_FILE_SIZE))
         
-        await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(help_text)
     
     async def cancel_command(self, update: Update, context: CallbackContext):
         """Handle /cancel command"""
@@ -210,8 +202,7 @@ Just send me a link and I'll try to download it!
         if user_id in self.active_downloads:
             filename = self.active_downloads[user_id]
             del self.active_downloads[user_id]
-            await update.message.reply_text(f"✅ Cancelled download: *{filename}*", 
-                                          parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(f"✅ Cancelled download: {filename}")
         else:
             await update.message.reply_text("📭 No active download to cancel.")
     
@@ -221,17 +212,17 @@ Just send me a link and I'll try to download it!
         bot_uptime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         status_text = f"""
-📊 *Bot Status*
+📊 Bot Status
 • Active downloads: {active_count}
 • Server time: {bot_uptime}
 • Max file size: {self.format_size(MAX_FILE_SIZE)}
 • Ready: ✅
 
-*Storage:*
+Storage:
 • Temp directory: {self.temp_dir}
 • Files will be automatically cleaned up
         """
-        await update.message.reply_text(status_text, parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(status_text)
     
     async def handle_url_message(self, update: Update, context: CallbackContext):
         """Handle URL messages"""
@@ -246,21 +237,19 @@ Just send me a link and I'll try to download it!
         
         # Validate URL
         if not self.is_valid_url(url):
-            await update.message.reply_text("❌ *Invalid URL*\n"
-                                          "Please send a valid HTTP/HTTPS link starting with http:// or https://",
-                                          parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text("❌ Invalid URL\n"
+                                          "Please send a valid HTTP/HTTPS link starting with http:// or https://")
             return
         
         # Send initial status
-        status_msg = await update.message.reply_text("🔍 *Analyzing URL...*", 
-                                                   parse_mode=ParseMode.MARKDOWN)
+        status_msg = await update.message.reply_text("🔍 Analyzing URL...")
         
         try:
             # Get file info
             file_size, content_type = self.get_file_info(url)
             
             if file_size is None:
-                await status_msg.edit_text("❌ *Cannot access file*\n"
+                await status_msg.edit_text("❌ Cannot access file\n"
                                          "The server might be blocking bots or the link is invalid.")
                 return
             
@@ -268,7 +257,7 @@ Just send me a link and I'll try to download it!
             if file_size > MAX_FILE_SIZE:
                 size_readable = self.format_size(file_size)
                 max_readable = self.format_size(MAX_FILE_SIZE)
-                await status_msg.edit_text(f"❌ *File too large*\n"
+                await status_msg.edit_text(f"❌ File too large\n"
                                          f"Size: {size_readable}\n"
                                          f"Limit: {max_readable}\n"
                                          f"\nPlease use a smaller file.")
@@ -279,22 +268,20 @@ Just send me a link and I'll try to download it!
             
             # Check file extension
             if not self.is_extension_allowed(filename):
-                await status_msg.edit_text(f"⚠️ *Unsupported file type*\n"
-                                         f"File: `{filename}`\n"
-                                         f"\nI support common file types only.",
-                                         parse_mode=ParseMode.MARKDOWN)
+                await status_msg.edit_text(f"⚠️ Unsupported file type\n"
+                                         f"File: {filename}\n"
+                                         f"\nI support common file types only.")
                 return
             
             # Show file info
             size_readable = self.format_size(file_size)
             file_type = content_type.split(';')[0] if content_type else 'Unknown'
             
-            await status_msg.edit_text(f"📄 *File Info*\n"
-                                     f"Name: `{filename}`\n"
+            await status_msg.edit_text(f"📄 File Info\n"
+                                     f"Name: {filename}\n"
                                      f"Size: {size_readable}\n"
                                      f"Type: {file_type}\n"
-                                     f"\n⬇️ *Starting download...*",
-                                     parse_mode=ParseMode.MARKDOWN)
+                                     f"\n⬇️ Starting download...")
             
             # Start download
             self.active_downloads[user_id] = filename
@@ -319,10 +306,9 @@ Just send me a link and I'll try to download it!
             
         except Exception as e:
             logger.error(f"Error in handle_url_message: {e}")
-            await status_msg.edit_text(f"❌ *Error*\n"
-                                     f"```\n{str(e)[:200]}\n```\n"
-                                     f"\nPlease try again or use a different link.",
-                                     parse_mode=ParseMode.MARKDOWN)
+            await status_msg.edit_text(f"❌ Error\n"
+                                     f"\n{str(e)[:200]}\n\n"
+                                     f"\nPlease try again or use a different link.")
             if user_id in self.active_downloads:
                 del self.active_downloads[user_id]
     
@@ -353,27 +339,26 @@ Just send me a link and I'll try to download it!
                                 progress_bar = "▓" * bars + "░" * (20 - bars)
                                 
                                 await status_msg.edit_text(
-                                    f"⬇️ *Downloading...*\n"
-                                    f"File: `{filename}`\n"
+                                    f"⬇️ Downloading...\n"
+                                    f"File: {filename}\n"
                                     f"Progress: {progress:.1f}%\n"
-                                    f"`[{progress_bar}]`\n"
-                                    f"{downloaded_fmt} / {total_fmt}",
-                                    parse_mode=ParseMode.MARKDOWN
+                                    f"[{progress_bar}]\n"
+                                    f"{downloaded_fmt} / {total_fmt}"
                                 )
             
             return True
             
         except requests.exceptions.Timeout:
-            await status_msg.edit_text("⏱️ *Timeout*\n"
+            await status_msg.edit_text("⏱️ Timeout\n"
                                      "The server took too long to respond.")
             return False
         except requests.exceptions.ConnectionError:
-            await status_msg.edit_text("🔌 *Connection Error*\n"
+            await status_msg.edit_text("🔌 Connection Error\n"
                                      "Cannot connect to the server.")
             return False
         except Exception as e:
             logger.error(f"Download error: {e}")
-            await status_msg.edit_text(f"❌ *Download Failed*\n"
+            await status_msg.edit_text(f"❌ Download Failed\n"
                                      f"Error: {str(e)[:100]}")
             return False
     
@@ -383,15 +368,14 @@ Just send me a link and I'll try to download it!
             file_size = os.path.getsize(filepath)
             
             if file_size == 0:
-                await status_msg.edit_text("❌ *Empty File*\n"
+                await status_msg.edit_text("❌ Empty File\n"
                                          "Downloaded file is empty.")
                 return
             
-            await status_msg.edit_text(f"✅ *Download Complete!*\n"
-                                     f"File: `{filename}`\n"
+            await status_msg.edit_text(f"✅ Download Complete!\n"
+                                     f"File: {filename}\n"
                                      f"Size: {self.format_size(file_size)}\n"
-                                     f"\n📤 *Uploading to Telegram...*",
-                                     parse_mode=ParseMode.MARKDOWN)
+                                     f"\n📤 Uploading to Telegram...")
             
             # Determine file type and send appropriately
             mime_type, _ = mimetypes.guess_type(filepath)
@@ -400,34 +384,30 @@ Just send me a link and I'll try to download it!
                 if mime_type and mime_type.startswith('video/'):
                     await update.message.reply_video(
                         video=InputFile(file, filename=filename),
-                        caption=f"🎬 `{filename}`",
-                        parse_mode=ParseMode.MARKDOWN,
+                        caption=f"🎬 {filename}",
                         supports_streaming=True
                     )
                 elif mime_type and mime_type.startswith('image/'):
                     await update.message.reply_photo(
                         photo=InputFile(file, filename=filename),
-                        caption=f"🖼️ `{filename}`",
-                        parse_mode=ParseMode.MARKDOWN
+                        caption=f"🖼️ {filename}"
                     )
                 elif mime_type and mime_type.startswith('audio/'):
                     await update.message.reply_audio(
                         audio=InputFile(file, filename=filename),
-                        caption=f"🎵 `{filename}`",
-                        parse_mode=ParseMode.MARKDOWN
+                        caption=f"🎵 {filename}"
                     )
                 else:
                     await update.message.reply_document(
                         document=InputFile(file, filename=filename),
-                        caption=f"📁 `{filename}`",
-                        parse_mode=ParseMode.MARKDOWN
+                        caption=f"📁 {filename}"
                     )
             
             await status_msg.delete()
             
         except Exception as e:
             logger.error(f"Error sending file: {e}")
-            await status_msg.edit_text(f"❌ *Upload Failed*\n"
+            await status_msg.edit_text(f"❌ Upload Failed\n"
                                      f"Error: {str(e)[:100]}\n"
                                      f"\nFile might be too large or format not supported.")
     
@@ -470,30 +450,15 @@ Just send me a link and I'll try to download it!
         
         application.add_error_handler(error_handler)
     
-    def run_webhook(self):
-        """Run bot with webhook (for Render.com)"""
-        application = Application.builder().token(BOT_TOKEN).build()
-        self.setup_handlers(application)
-        
-        # Set up webhook for Render.com
-        if WEBHOOK_URL:
-            logger.info(f"Setting up webhook on {WEBHOOK_URL}")
-            application.run_webhook(
-                listen="0.0.0.0",
-                port=PORT,
-                url_path=BOT_TOKEN,
-                webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}"
-            )
-        else:
-            logger.info("Running in polling mode")
-            application.run_polling()
-    
     def run_polling(self):
-        """Run bot with polling (for local testing)"""
+        """Run bot with polling"""
         application = Application.builder().token(BOT_TOKEN).build()
         self.setup_handlers(application)
         logger.info("Starting bot in polling mode...")
-        application.run_polling()
+        application.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=Update.ALL_TYPES
+           )
 
 # ===== Main Execution =====
 
@@ -526,14 +491,29 @@ def main():
 Starting bot...
     """)
     
+    class HealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b'Bot is alive!')
+        
+        def log_message(self, format, *args):
+            pass  # Silence logs
+
+    def run_health_server():
+        port = int(os.environ.get("PORT", 10000))
+        httpd = HTTPServer(('0.0.0.0', port), HealthHandler)
+        logger.info(f"✅ Health server on port {port}")
+        httpd.serve_forever()
+    
+    # Start health server
+    health_thread = threading.Thread(target=run_health_server, daemon=True)
+    health_thread.start()
+    
     # Create and run bot
     bot = TelegramDownloadBot()
-    
-    # Run with webhook if WEBHOOK_URL is set (Render.com)
-    if WEBHOOK_URL:
-        bot.run_webhook()
-    else:
-        bot.run_polling()
+    bot.run_polling()
 
 if __name__ == "__main__":
     main()
