@@ -485,7 +485,6 @@ def main():
 📊 Config:
 • Max file size: {MAX_FILE_SIZE / (1024*1024):.0f}MB
 • Temp directory: {tempfile.gettempdir()}
-• Port: {PORT}
     
 Starting bot...
     """)
