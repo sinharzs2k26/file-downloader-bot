@@ -171,7 +171,6 @@ Limits:
 Commands:
 /start - Show this message
 /help - Detailed help
-/cancel - Cancel current download
 /status - Bot status
 
 Just send me a link to get started!
@@ -209,18 +208,7 @@ Just send me a link and I'll try to download it!
         """
         
         await update.message.reply_text(help_text)
-    
-    async def cancel_command(self, update: Update, context: CallbackContext):
-        """Handle /cancel command"""
-        user_id = update.effective_user.id
-        
-        if user_id in self.active_downloads:
-            filename = self.active_downloads[user_id]
-            del self.active_downloads[user_id]
-            await update.message.reply_text(f"✅ Cancelled download: {filename}")
-        else:
-            await update.message.reply_text("📭 No active download to cancel.")
-    
+
     async def status_command(self, update: Update, context: CallbackContext):
         """Handle /status command"""
         active_count = len(self.active_downloads)
@@ -247,7 +235,7 @@ Storage:
         # Check if already downloading
         if user_id in self.active_downloads:
             await update.message.reply_text("⏳ You already have a download in progress. "
-                                          "Wait or use /cancel")
+                                          "Wait")
             return
         
         # Validate URL
@@ -296,7 +284,7 @@ Storage:
                                      f"Name: {filename}\n"
                                      f"Size: {size_readable}\n"
                                      f"Type: {file_type}\n"
-                                     f"\n⬇️ Starting download...")
+                                     f"\n Download in progress... ⏳")
             
             # Start download
             self.active_downloads[user_id] = filename
@@ -474,7 +462,6 @@ Storage:
         # Command handlers
         application.add_handler(CommandHandler("start", self.start_command))
         application.add_handler(CommandHandler("help", self.help_command))
-        application.add_handler(CommandHandler("cancel", self.cancel_command))
         application.add_handler(CommandHandler("status", self.status_command))
         
         # URL handler
