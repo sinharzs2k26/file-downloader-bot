@@ -40,7 +40,7 @@ ALLOWED_EXTENSIONS = {
 class TelegramDownloadBot:
     def __init__(self):
         self.active_downloads = {}
-        self.download_progress = {}  # Track last progress to avoid duplicate updates
+        self.download_stats = {}
         self.temp_dir = tempfile.mkdtemp(prefix="tg_downloads_")
         logger.info(f"Created temp directory: {self.temp_dir}")
         
@@ -142,10 +142,6 @@ class TelegramDownloadBot:
         _, ext = os.path.splitext(filename.lower())
         return ext in ALLOWED_EXTENSIONS or ext == ''  # Allow files without extension
     
-    def generate_progress_key(self, user_id: int, filename: str) -> str:
-        """Generate a unique key for tracking progress"""
-        return f"{user_id}_{filename}"
-    
     # ===== Bot Command Handlers =====
     
     async def start_command(self, update: Update, context: CallbackContext):
@@ -221,10 +217,6 @@ Just send me a link and I'll try to download it!
         if user_id in self.active_downloads:
             filename = self.active_downloads[user_id]
             del self.active_downloads[user_id]
-            # Clean up progress tracking
-            progress_key = self.generate_progress_key(user_id, filename)
-            if progress_key in self.download_progress:
-                del self.download_progress[progress_key]
             await update.message.reply_text(f"✅ Cancelled download: {filename}")
         else:
             await update.message.reply_text("📭 No active download to cancel.")
@@ -308,33 +300,23 @@ Storage:
             
             # Start download
             self.active_downloads[user_id] = filename
-            progress_key = self.generate_progress_key(user_id, filename)
-            self.download_progress[progress_key] = {
-                'last_update': 0,
-                'last_percentage': 0,
-                'last_size': 0
-            }
             
             filepath = os.path.join(self.temp_dir, filename)
-            
+
             # Download with progress
-            success = await self.download_file_with_progress(url, filepath, status_msg, user_id, filename)
+            success = await self.download_file(url, filepath, status_msg, user_id, filename)
             
             if not success:
                 if user_id in self.active_downloads:
                     del self.active_downloads[user_id]
-                if progress_key in self.download_progress:
-                    del self.download_progress[progress_key]
                 return
-            
+                
             # Send file to user
             await self.send_file_to_user(update, filepath, filename, status_msg)
             
             # Clean up
             if user_id in self.active_downloads:
                 del self.active_downloads[user_id]
-            if progress_key in self.download_progress:
-                del self.download_progress[progress_key]
             if os.path.exists(filepath):
                 os.remove(filepath)
             
@@ -347,143 +329,84 @@ Storage:
             if user_id in self.active_downloads:
                 filename = self.active_downloads[user_id]
                 del self.active_downloads[user_id]
-                progress_key = self.generate_progress_key(user_id, filename)
-                if progress_key in self.download_progress:
-                    del self.download_progress[progress_key]
     
-    async def download_file_with_progress(self, url: str, filepath: str, status_msg, user_id: int, filename: str) -> bool:
-        """Download file with smart progress updates (fixes 'Message is not modified' error)"""
+    async def download_file(self, url: str, filepath: str, status_msg, user_id: int, filename: str) -> bool:
+        """Download file with measuring speed"""
         try:
+            start_time = time.time()
+            
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
             response = requests.get(url, headers=headers, stream=True, timeout=30)
             response.raise_for_status()
             
             total_size = int(response.headers.get('content-length', 0))
-            downloaded = 0
-            start_time = time.time()
             
-            progress_key = self.generate_progress_key(user_id, filename)
-            
+            # Download with measuring speed
             with open(filepath, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
-                        downloaded += len(chunk)
-                        
-                        # Calculate progress
-                        if total_size > 0:
-                            progress_percent = (downloaded / total_size) * 100
-                            
-                            # Get progress tracking info
-                            progress_info = self.download_progress.get(progress_key, {
-                                'last_update': 0,
-                                'last_percentage': 0,
-                                'last_size': 0
-                            })
-                            
-                            # Calculate download speed
-                            elapsed_time = time.time() - start_time
-                            if elapsed_time > 0:
-                                speed = downloaded / elapsed_time  # bytes per second
-                                speed_str = self.format_size(speed) + "/s"
-                            else:
-                                speed_str = "N/A"
-                            
-                            # Update message only if:
-                            # 1. Progress changed by at least 1% OR
-                            # 2. At least 1MB downloaded since last update OR
-                            # 3. At least 2 seconds passed since last update
-                            should_update = (
-                                abs(progress_percent - progress_info['last_percentage']) >= 1 or
-                                (downloaded - progress_info['last_size']) >= (1024 * 1024) or
-                                (time.time() - progress_info['last_update']) >= 2
-                            )
-                            
-                            if should_update and total_size > 0:
-                                downloaded_fmt = self.format_size(downloaded)
-                                total_fmt = self.format_size(total_size)
-                                
-                                # Create progress bar (20 characters)
-                                bars = int(progress_percent / 5)
-                                progress_bar = "▓" * bars + "░" * (20 - bars)
-                                
-                                # ETA calculation
-                                if progress_percent > 0 and elapsed_time > 0:
-                                    total_time = elapsed_time * (100 / progress_percent)
-                                    remaining_time = total_time - elapsed_time
-                                    if remaining_time < 60:
-                                        eta_str = f"{int(remaining_time)}s"
-                                    elif remaining_time < 3600:
-                                        eta_str = f"{int(remaining_time/60)}m {int(remaining_time%60)}s"
-                                    else:
-                                        eta_str = f"{int(remaining_time/3600)}h {int((remaining_time%3600)/60)}m"
-                                else:
-                                    eta_str = "Calculating..."
-                                
-                                message_text = (
-                                    f"⬇️ Downloading...\n"
-                                    f"File: {filename}\n"
-                                    f"Progress: {progress_percent:.1f}%\n"
-                                    f"[{progress_bar}]\n"
-                                    f"{downloaded_fmt} / {total_fmt}\n"
-                                    f"Speed: {speed_str}\n"
-                                    f"ETA: {eta_str}"
-                                )
-                                
-                                try:
-                                    await status_msg.edit_text(message_text)
-                                    
-                                    # Update progress tracking
-                                    self.download_progress[progress_key] = {
-                                        'last_update': time.time(),
-                                        'last_percentage': progress_percent,
-                                        'last_size': downloaded
-                                    }
-                                    
-                                except BadRequest as e:
-                                    if "Message is not modified" in str(e):
-                                        # This is okay, just update the tracking without editing
-                                        self.download_progress[progress_key] = {
-                                            'last_update': time.time(),
-                                            'last_percentage': progress_percent,
-                                            'last_size': downloaded
-                                        }
-                                    else:
-                                        raise
+            
+            end_time = time.time()
+            download_time = end_time - start_time
+            
+            # Calculate average speed
+            file_size = os.path.getsize(filepath)
+            if download_time > 0:
+                avg_speed = file_size / download_time  # bytes per second
+                avg_speed_str = self.format_size(avg_speed) + "/s"
+            else:
+                avg_speed_str = "N/A"
+            
+            # Store for final message
+            self.download_stats[user_id] = {
+                'download_time': download_time,
+                'avg_speed': avg_speed_str,
+                'file_size': file_size
+            }
             
             return True
             
-        except requests.exceptions.Timeout:
-            await status_msg.edit_text("⏱️ Timeout\n"
-                                     "The server took too long to respond.")
-            return False
-        except requests.exceptions.ConnectionError:
-            await status_msg.edit_text("🔌 Connection Error\n"
-                                     "Cannot connect to the server.")
-            return False
         except Exception as e:
             logger.error(f"Download error: {e}")
-            await status_msg.edit_text(f"❌ Download Failed\n"
-                                     f"Error: {str(e)[:100]}")
+            await status_msg.edit_text(f"❌ Download Failed\nError: {str(e)[:100]}")
             return False
     
     async def send_file_to_user(self, update: Update, filepath: str, filename: str, status_msg):
-        """Send downloaded file to user"""
+        """Send downloaded file to user with download stats"""
         try:
+            user_id = update.effective_user.id
             file_size = os.path.getsize(filepath)
             
-            if file_size == 0:
-                await status_msg.edit_text("❌ Empty File\n"
-                                         "Downloaded file is empty.")
-                return
+            # Get download stats if available
+            stats = self.download_stats.get(user_id, {})
+            download_time = stats.get('download_time', 0)
+            avg_speed = stats.get('avg_speed', 'N/A')
             
-            await status_msg.edit_text(f"✅ Download Complete!\n"
-                                     f"File: {filename}\n"
-                                     f"Size: {self.format_size(file_size)}\n"
-                                     f"\n📤 Uploading to Telegram...")
+            # Format download time
+            if download_time < 60:
+                time_str = f"{download_time:.1f} seconds"
+            elif download_time < 3600:
+                time_str = f"{download_time/60:.1f} minutes"
+            else:
+                time_str = f"{download_time/3600:.1f} hours"
             
+            # Show completion message with stats
+            await status_msg.edit_text(
+                f"✅ Download Complete!\n"
+                f"File: {filename}\n"
+                f"Size: {self.format_size(file_size)}\n"
+                f"Time: {time_str}\n"
+                f"Avg Speed: {avg_speed}\n"
+                f"\n📤 Uploading to Telegram..."
+            )
+            
+            # Remove stats after showing
+            if user_id in self.download_stats:
+                del self.download_stats[user_id]
+        
             # Determine file type and send appropriately
             mime_type, _ = mimetypes.guess_type(filepath)
             
