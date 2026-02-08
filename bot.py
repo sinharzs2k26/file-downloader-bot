@@ -491,7 +491,7 @@ Storage:
                 if mime_type and mime_type.startswith('video/'):
                     await update.message.reply_video(
                         video=InputFile(file, filename=filename),
-                        caption=f"🎬 {filename}"
+                        caption=f"🎬 {filename}",
                         supports_streaming=True
                     )
                 elif mime_type and mime_type.startswith('image/'):
