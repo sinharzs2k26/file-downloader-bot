@@ -24,7 +24,3 @@ A powerful Telegram bot that downloads files from direct URLs and sends them bac
 ### 🤖 **User Experience**
 - Simple commands: `/start`, `/help`, `/status`
 - Direct URL input (just paste and send!)
-
----
-
-**Just send a direct download link and watch the magic happen!** 🎯
