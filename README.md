@@ -15,39 +15,15 @@ A powerful Telegram bot that downloads files from direct URLs and sends them bac
   - **Applications**: APK, EXE, DMG, ISO
 
 ### ⚡ **Performance Features**
-- Download speed measurement and display
+- Download speed measurement
 - Download time tracking
 - Smart file type detection
 - Automatic filename extraction from URLs
 - File size validation before download
 
-### 🛡️ **Safety & Reliability**
-- File size limits (50MB max - Telegram API limit)
-- URL validation and sanitization
-- Temporary file cleanup
-- Error handling and user-friendly messages
-- Secure file handling
-
 ### 🤖 **User Experience**
 - Simple commands: `/start`, `/help`, `/status`
 - Direct URL input (just paste and send!)
-- Download statistics after completion
-- Clean progress indicators
-- Multi-user support
-
-### 🚀 **Technical Features**
-- Ready for cloud deployment (Render.com compatible)
-- Single-file implementation for easy setup
-- Async operations for better performance
-- Proper logging and error tracking
-- Automatic temporary file cleanup
-
-### 📊 **Post-Download Information**
-- File size display
-- Total download time
-- Average download speed
-- File type detection
-- Proper Telegram file categorization
 
 ---
 
