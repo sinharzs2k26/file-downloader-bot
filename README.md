@@ -15,11 +15,11 @@ A powerful Telegram bot that downloads files from direct URLs and sends them bac
   - **Applications**: APK, EXE, DMG, ISO
 
 ### ⚡ **Performance Features**
-- Download speed measurement
-- Download time tracking
+- Real time download & upload progress bar
 - Smart file type detection
 - Automatic filename extraction from URLs
 - File size validation before download
+- 2GB max file size
 
 ### 🤖 **User Experience**
 - Simple commands: `/start`, `/help`, `/status`
