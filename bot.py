@@ -260,7 +260,7 @@ Ready to download your files!
             
             progress_text = (
                 f"{emoji} {action}...\n"
-                f"File: `{filename}`\n"
+                f"**File:** `{filename}`\n"
                 f"<code>{progress}</code> <b>{round(percentage, 2)}%</b>\n"
                 f"<b>Progress:</b> {self.humanbytes(current)} / {self.humanbytes(total)}\n"
                 f"<b>Speed:</b> {self.humanbytes(speed)}/s\n"
@@ -396,8 +396,8 @@ Ready to download your files!
             # Confirm download
             await status_msg.edit_text(
                 f"📄 **File Info**\n"
-                f"Name: `{filename}`\n"
-                f"Size: {size_readable}\n\n"
+                f"**Name:** `{filename}`\n"
+                f"**Size:** {size_readable}\n\n"
             )
             
             # Download file
