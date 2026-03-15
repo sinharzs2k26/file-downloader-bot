@@ -44,6 +44,7 @@ class DownloadBot:
         )
         self.active_downloads = {}
         self.download_stats = {}
+        self.upload_stats = {}
         self.MAX_FILE_SIZE = 2 * 1024 ** 3
         self.setup_handlers()
     
@@ -82,37 +83,74 @@ class DownloadBot:
             i += 1
         return f"{size_bytes:.2f} {units[i]}"
     
-    def extract_filename(self, url: str, content_type: str = None) -> str:
+    def extract_filename(self, url: str, content_type: str = None, response_headers: dict = None) -> str:
+        """Extract filename from URL or response headers"""
+        
+        # FIRST: Try headers
+        if response_headers and 'content-disposition' in response_headers:
+            cd = response_headers['content-disposition']
+            filename_match = re.search(r"filename\*?=([^;]+)", cd)
+            if filename_match:
+                filename = filename_match.group(1).strip('"').strip("'")
+                if filename.startswith("UTF-8''"):
+                    filename = filename.replace("UTF-8''", "")
+                    filename = unquote(filename)
+                
+                # ===== ADD CLEANING LOGIC HERE =====
+                filename = filename.split('?')[0].split('#')[0]
+                filename = re.sub(r'[<>:"/\\|?*]', '', filename)
+                if len(filename) > 100:
+                    name, ext = os.path.splitext(filename)
+                    filename = name[:95] + ext
+                return filename
+        
+        # SECOND: Fallback to URL parsing (copy your old logic here)
         try:
             parsed = urlparse(url)
             path = unquote(parsed.path)
             filename = os.path.basename(path)
             
             if filename:
-                # Clean filename
+                # ===== SAME CLEANING LOGIC =====
+                filename = filename.split('?')[0].split('#')[0]
                 filename = re.sub(r'[<>:"/\\|?*]', '', filename)
                 if len(filename) > 100:
                     name, ext = os.path.splitext(filename)
                     filename = name[:95] + ext
+                
+                if '.' not in filename and content_type:
+                    ext = mimetypes.guess_extension(content_type)
+                    if ext:
+                        filename += ext
                 return filename
-            
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            return f"download_{timestamp}.bin"
         except:
-            return f"download_{int(time.time())}.bin"
+            pass
+        
+        # THIRD: Generate filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if content_type:
+            ext = mimetypes.guess_extension(content_type) or '.bin'
+            return f"download_{timestamp}{ext}"
+        return f"download_{timestamp}.bin"
     
-    def get_file_info(self, url: str) -> Tuple[Optional[int], Optional[str]]:
+    def get_file_info(self, url: str) -> Tuple[Optional[int], Optional[str], Optional[dict]]:
+        """Get file size, type, and headers from URL"""
         try:
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
             response = requests.head(url, headers=headers, allow_redirects=True, timeout=10)
+            response.raise_for_status()
+            
             size = int(response.headers.get('content-length', 0))
             content_type = response.headers.get('content-type', '')
-            return size, content_type
+            
+            # Return headers too for filename extraction
+            return size, content_type, response.headers
+            
         except Exception as e:
             logger.error(f"Error getting file info: {e}")
-            return None, None
+            return None, None, None
 
     def humanbytes(self, size: int) -> str:
         """Convert bytes to human readable format"""
@@ -300,8 +338,8 @@ Ready to download your files!
         return True
     
     async def handle_msg(self, client: Client, message: Message):
-        if admin_states[message.from_user.id] == "waiting_for_msg":
-            admin_states[message.from_user.id] = None
+        if admin_states["admin_action"] == "waiting_for_msg":
+            admin_states["admin_action"] = None
             if not os.path.exists(uid_path):
                 await message.reply_text("No users to broadcast to.")
                 return
@@ -337,7 +375,7 @@ Ready to download your files!
             
             # Get file info
             status_msg = await message.reply_text("🔍 Analyzing URL...")
-            file_size, content_type = self.get_file_info(url)
+            file_size, content_type, headers = self.get_file_info(url)
             
             if file_size is None:
                 await status_msg.edit_text("❌ Cannot access file. Invalid URL or server blocked.")
@@ -352,7 +390,7 @@ Ready to download your files!
                 return
             
             # Get filename
-            filename = self.extract_filename(url, content_type)
+            filename = self.extract_filename(url, content_type, headers)
             size_readable = self.format_size(file_size)
             
             # Confirm download
@@ -379,55 +417,82 @@ Ready to download your files!
             try:
                 # Get file stats
                 file_stat = os.stat(filepath)
+                file_size = file_stat.st_size
+                
+                # Track uploaded bytes manually if needed, or use callback
+                uploaded_bytes = 0
+                
+                # Define a wrapper callback that tracks total uploaded
+                async def upload_callback(current, total, *args):
+                    nonlocal uploaded_bytes
+                    uploaded_bytes = current
+                    await self.show_progress(
+                        current=current,
+                        total=total,
+                        message=upload_msg,
+                        filename=filename,
+                        start_time=upload_start,
+                        action="Uploading"
+                    )
                 
                 # Determine file type and send with progress callback
                 ext = os.path.splitext(filename)[1].lower()
                 
                 if ext in ['.mp4', '.avi', '.mkv', '.mov', '.webm']:
-                    # ===== PASS PROGRESS CALLBACK HERE =====
                     await message.reply_video(
                         video=filepath,
                         caption=f"🎬 `{filename}`",
-                        progress=self.show_progress,
-                        progress_args=(upload_msg, filename, upload_start, "Uploading")
+                        progress=upload_callback,  # Use wrapper callback
+                        progress_args=(file_size,)  # Pyrogram passes current,total
                     )
-                    
                 elif ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
                     await message.reply_photo(
                         photo=filepath,
                         caption=f"🖼️ `{filename}`",
-                        progress=self.show_progress,
-                        progress_args=(upload_msg, filename, upload_start, "Uploading")
+                        progress=upload_callback,
+                        progress_args=(file_size,)
                     )
-                    
                 elif ext in ['.mp3', '.wav', '.ogg', '.flac']:
                     await message.reply_audio(
                         audio=filepath,
                         caption=f"🎵 `{filename}`",
-                        progress=self.show_progress,
-                        progress_args=(upload_msg, filename, upload_start, "Uploading")
+                        progress=upload_callback,
+                        progress_args=(file_size,)
                     )
-                    
                 else:
-                    # Send as document for everything else
                     await message.reply_document(
                         document=filepath,
                         caption=f"📁 `{filename}`",
-                        progress=self.show_progress,
-                        progress_args=(upload_msg, filename, upload_start, "Uploading")
+                        progress=upload_callback,
+                        progress_args=(file_size,)
                     )
                 
                 upload_time = time.time() - upload_start
                 
-                # Show final completion message with stats
-                stats = self.download_stats.get(user_id, {})
-                download_time_str = f"{stats.get('time', 0):.1f}s" if stats else "N/A"
-                speed_str = stats.get('speed', 'N/A')
+                # Calculate upload speed
+                if upload_time > 0 and file_size > 0:
+                    upload_speed = file_size / upload_time
+                    upload_speed_str = self.humanbytes(upload_speed) + "/s"
+                else:
+                    upload_speed_str = "N/A"
                 
+                # Store upload stats
+                self.upload_stats[user_id] = {
+                    'time': upload_time,
+                    'speed': upload_speed_str,
+                    'size': file_size
+                }
+                
+                # Get download stats
+                download_stats = self.download_stats.get(user_id, {})
+                download_time_str = f"{download_stats.get('time', 0):.1f}s" if download_stats else "N/A"
+                download_speed_str = download_stats.get('speed', 'N/A')
+                
+                # Show final completion message with BOTH speeds
                 await upload_msg.edit_text(
                     f"✅ **Complete!**\n"
-                    f"📥 Download: {download_time_str} - {speed_str}\n"
-                    f"📤 Upload: {upload_time:.1f}s\n"
+                    f"📥 Download: {download_time_str} - {download_speed_str}\n"
+                    f"📤 Upload: {upload_time:.1f}s - {upload_speed_str}\n"
                 )
                 
             except Exception as e:
@@ -479,32 +544,32 @@ Ready to download your files!
                 else:
                     await cb.answer("File not found!", show_alert=True)
             elif cb.data == "update_users":
-                admin_states[cb.from_user.id] = "waiting_for_file"
+                admin_states["admin_action"] = "waiting_for_file"
                 await cb.edit_message_text(
                     "📤 **Update User List**\n\nPlease send me a new `.txt` file containing the User IDs (one per line).",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel")]])
                 )
             elif cb.data == "ask_broadcast":
                 await cb.answer()
-                admin_states[cb.from_user.id] = "waiting_for_msg"
+                admin_states["admin_action"] = "waiting_for_msg"
                 await cb.edit_message_text(
                     "📝 **Broadcast Mode**\n\nSend the message you want to broadcast now.",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel")]])
                 )
             elif cb.data == "cancel":
                 await cb.answer()
-                admin_states[cb.from_user.id] = None
+                admin_states["admin_action"] = None
                 await cb.edit_message_text(bot_status_txt, reply_markup=reply_markup)
 
         @self.app.on_message(filters.private)
         async def admin_input_handler(client, message):
-            state = admin_states.get(message.from_user.id)
+            state = admin_states.get("admin_action")
             if not state:
                 return
             if state == "waiting_for_file":
                 if message.document and message.document.file_name.endswith(".txt"):
                     await message.download(file_name=uid_path)
-                    admin_states[message.from_user.id] = None
+                    admin_states["admin_action"] = None
                     await message.reply_text("✅ `users.txt` has been updated successfully!")
                 else:
                     await message.reply_text("❌ Please send a valid `.txt` file.")
