@@ -66,8 +66,8 @@ class DownloadBot:
         except:
             bot_status_txt = "No User ID saved in the server. Users have not sent /start yet after updating the bot."
         reply_markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📢 Broadcast", callback_data="ask_broadcast"),
-             InlineKeyboardButton("🔄 Refresh", callback_data="refresh_stats")],
+            [InlineKeyboardButton("📢 Broadcast", callback_data="ask_broadcast")],
+             [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_stats")],
             [InlineKeyboardButton("🆔 Get all IDs", callback_data="get_ids")],
             [InlineKeyboardButton("📝 Update users.txt", callback_data="update_users")]
         ])
