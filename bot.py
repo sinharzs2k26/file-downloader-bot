@@ -11,7 +11,7 @@ from urllib.parse import urlparse, unquote
 from datetime import datetime
 from typing import Optional, Tuple
 from aiohttp import web
-from pyrogram import Client, filters
+from pyrogram import Client, filters, types
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import FloodWait
 
@@ -49,16 +49,40 @@ class DownloadBot:
         self.setup_handlers()
     
     # ===== HELPER FUNCTIONS =====
-    def save_user(self, user_id):
-        with open(uid_path, "a+") as f:
-            f.seek(0)
-            users = f.read().splitlines()
-            if str(user_id) not in users:
-                f.write(f"{user_id}\n")
+    def save_user_data(self, user_id, username, first_name, last_name):
+        username = str(username) if username else "No_Username"
+        first_name = str(first_name).replace(",", "")
+        last_name = (str(last_name) if last_name else "").replace(",", "")
+        exists = False
+        try:
+            with open(uid_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith(f"{user_id},"):
+                        exists = True
+                        break
+        except FileNotFoundError:
+            pass
+        if not exists:
+            with open(uid_path, "a", encoding="utf-8") as f:
+                f.write(f"{user_id}, {username}, {first_name} {last_name}\n")
+
     
     def count_users(self):
         with open(uid_path, "r") as f:
             return len(f.readlines())
+
+    def get_all_ids(self):
+        ids = []
+        try:
+            with open(uid_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    # Split by comma and take the first item (the ID)
+                    user_id = line.strip().split(",")[0]
+                    if user_id:
+                        ids.append(int(user_id))
+        except FileNotFoundError:
+            print("No users found yet.")
+        return ids
 
     def admin_message(self):
         try:
@@ -67,7 +91,7 @@ class DownloadBot:
             bot_status_txt = "No User ID saved in the server. Users have not sent /start yet after updating the bot."
         reply_markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("📢 Broadcast", callback_data="ask_broadcast")],
-             [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_stats")],
+            [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_stats")],
             [InlineKeyboardButton("🆔 Get all IDs", callback_data="get_ids")],
             [InlineKeyboardButton("📝 Update users.txt", callback_data="update_users")]
         ])
@@ -170,8 +194,13 @@ class DownloadBot:
         await message.reply_text(bot_status_txt, reply_markup=reply_markup)
 
     async def start_command(self, client: Client, message: Message):
-        self.save_user(message.from_user.id)
-        user = message.from_user
+    user = message.from_user
+    self.save_user_data(
+            user.id, 
+            user.username, 
+            user.first_name, 
+            user.last_name
+        )
         text = f"""
 🚀 **High-Speed Download Bot (2GB Limit)**
 
@@ -180,7 +209,7 @@ Hey {user.first_name}! I can download files up to **2GB** using Telegram's nativ
 **Features:**
 • Download files up to **2GB** (50x bigger than normal bots)
 • **Faster** downloads/uploads
-• Shows download & upload progress
+• Shows download speed & time
 • Supports all file types
 
 **How to use:**
@@ -260,7 +289,7 @@ Ready to download your files!
             
             progress_text = (
                 f"{emoji} {action}...\n"
-                f"**File:** `{filename}`\n"
+                f"File: `{filename}`\n"
                 f"<code>{progress}</code> <b>{round(percentage, 2)}%</b>\n"
                 f"<b>Progress:</b> {self.humanbytes(current)} / {self.humanbytes(total)}\n"
                 f"<b>Speed:</b> {self.humanbytes(speed)}/s\n"
@@ -343,9 +372,7 @@ Ready to download your files!
             if not os.path.exists(uid_path):
                 await message.reply_text("No users to broadcast to.")
                 return
-            with open(uid_path, "r") as f:
-                users = f.read().splitlines()
-        
+            users = get_all_ids()
             status = await message.reply_text(f"🚀 Sending to {len(users)} users...")
             success = 0
             failed = 0
@@ -357,7 +384,7 @@ Ready to download your files!
                 except:
                     failed += 1
             user_s = "users" if success > 1 else "user"
-            fail_msg = f"\n❌ Failed {failed}" if failed > 1 else ""
+            fail_msg = f"\n❌ Failed {failed}" if failed > 0 else ""
             await status.edit_text(f"✅ **Broadcast Done**\nSent to {success} {user_s}.{fail_msg}")
         else:
             user_id = message.from_user.id
@@ -396,8 +423,8 @@ Ready to download your files!
             # Confirm download
             await status_msg.edit_text(
                 f"📄 **File Info**\n"
-                f"**Name:** `{filename}`\n"
-                f"**Size:** {size_readable}\n\n"
+                f"Name: `{filename}`\n"
+                f"Size: {size_readable}\n\n"
             )
             
             # Download file
