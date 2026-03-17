@@ -11,7 +11,7 @@ from urllib.parse import urlparse, unquote
 from datetime import datetime
 from typing import Optional, Tuple
 from aiohttp import web
-from pyrogram import Client, filters, types
+from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import FloodWait
 
