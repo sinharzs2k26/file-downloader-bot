@@ -16,9 +16,9 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import FloodWait
 
 # ===== CONFIGURATION =====
-API_ID = 38403314
-API_HASH = "9cc707ada9746c99c3c317d36f70272c"
-BOT_TOKEN = "8556710977:AAHsSMhSUMax7w8MQr9e3nhz-KsytOAjcxw"
+API_ID = os.environ.get("API_ID")
+API_HASH = os.environ.get("API_HASH")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 DOWNLOAD_DIR = tempfile.mkdtemp(prefix="dl_")
 UID_DIR = "./downloads/"
 os.makedirs(UID_DIR, exist_ok=True)
