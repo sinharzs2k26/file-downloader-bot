@@ -20,7 +20,7 @@ API_ID = os.environ.get("API_ID")
 API_HASH = os.environ.get("API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 DOWNLOAD_DIR = tempfile.mkdtemp(prefix="dl_")
-UID_DIR = "./downloads/"
+UID_DIR = "./uids/" # This line is not deployed yet
 os.makedirs(UID_DIR, exist_ok=True)
 uid_path = os.path.join(UID_DIR, "users.txt")
 ADMIN_IDS = [7728700576, 7753358925]
