@@ -6,6 +6,7 @@ import math
 from datetime import timedelta
 import time
 import tempfile
+import mimetypes
 import requests
 from urllib.parse import urlparse, unquote
 from datetime import datetime
@@ -20,7 +21,7 @@ API_ID = os.environ.get("API_ID")
 API_HASH = os.environ.get("API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 DOWNLOAD_DIR = tempfile.mkdtemp(prefix="dl_")
-UID_DIR = "./uids/" # This line is not deployed yet
+UID_DIR = "./uids/"
 os.makedirs(UID_DIR, exist_ok=True)
 uid_path = os.path.join(UID_DIR, "users.txt")
 ADMIN_IDS = [7728700576, 7753358925]
@@ -372,7 +373,7 @@ Ready to download your files!
             if not os.path.exists(uid_path):
                 await message.reply_text("No users to broadcast to.")
                 return
-            users = get_all_ids()
+            users = self.get_all_ids()
             status = await message.reply_text(f"🚀 Sending to {len(users)} users...")
             success = 0
             failed = 0
