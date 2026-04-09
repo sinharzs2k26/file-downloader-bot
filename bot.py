@@ -290,7 +290,6 @@ Ready to download your files!
             
             progress_text = (
                 f"{emoji} {action}...\n"
-                f"File: `{filename}`\n"
                 f"<code>{progress}</code> <b>{round(percentage, 2)}%</b>\n"
                 f"<b>Progress:</b> {self.humanbytes(current)} / {self.humanbytes(total)}\n"
                 f"<b>Speed:</b> {self.humanbytes(speed)}/s\n"
@@ -308,7 +307,7 @@ Ready to download your files!
         
         # Create initial progress message
         status_msg = await message.reply_text(
-            f"⬇️ Downloading `{filename}`...\n"
+            "⬇️ Downloading...\n"
             "<code>[□□□□□□□□□□]</code> <b>0%</b>\n"
             "<b>Progress:</b> 0MB / ?\n"
             "<b>Speed:</b> 0.00MB/s\n"
@@ -336,7 +335,7 @@ Ready to download your files!
                             message=status_msg,
                             filename=filename,
                             start_time=start_time,
-                            action="Downloading"  # This shows ⬇️
+                            action="Downloading"
                         )
 
                     # Yield control to event loop
@@ -424,8 +423,8 @@ Ready to download your files!
             # Confirm download
             await status_msg.edit_text(
                 f"📄 **File Info**\n"
-                f"Name: `{filename}`\n"
-                f"Size: {size_readable}\n\n"
+                f"**Name:** `{filename}`\n"
+                f"**Size:** {size_readable}\n\n"
             )
             
             # Download file
