@@ -368,7 +368,7 @@ Ready to download your files!
     
     async def handle_msg(self, client: Client, message: Message):
         if "admin_action" in admin_states:
-            admin_states["admin_action"] = None
+            del admin_states["admin_action"]
             if not os.path.exists(uid_path):
                 await message.reply_text("No users to broadcast to.")
                 return
@@ -585,7 +585,7 @@ Ready to download your files!
                 )
             elif cb.data == "cancel":
                 await cb.answer()
-                admin_states["admin_action"] = None
+                del admin_states["admin_action"]
                 await cb.edit_message_text(bot_status_txt, reply_markup=reply_markup)
 
         @self.app.on_message(filters.private)
