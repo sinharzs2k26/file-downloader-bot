@@ -367,7 +367,7 @@ Ready to download your files!
         return True
     
     async def handle_msg(self, client: Client, message: Message):
-        if "admin_action" in admin_states:
+        if "admin_action" in admin_states and admin_states["admin_action"] == "waiting_for_msg":
             del admin_states["admin_action"]
             if not os.path.exists(uid_path):
                 await message.reply_text("No users to broadcast to.")
