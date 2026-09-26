@@ -2,3 +2,5 @@ pyrogram
 tgcrypto
 aiohttp
 requests
+motor
+dnspython

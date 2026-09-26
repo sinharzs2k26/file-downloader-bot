@@ -24,3 +24,9 @@ A powerful Telegram bot that downloads files from direct URLs and sends them bac
 ### 🤖 **User Experience**
 - Simple commands: `/start`, `/help`, `/status`
 - Direct URL input (just paste and send!)
+
+## ⚙️ Configuration (Environment Variables)
+- `API_ID`: Telegram API ID
+- `API_HASH`: Telegram API Hash
+- `BOT_TOKEN`: Telegram Bot Token
+- `MONGO_URI`: MongoDB connection SRV string (e.g. `mongodb+srv://<user>:<password>@cluster0.mongodb.net/?retryWrites=true&w=majority`)

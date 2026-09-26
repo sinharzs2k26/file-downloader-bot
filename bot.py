@@ -15,16 +15,25 @@ from aiohttp import web
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import FloodWait
+import motor.motor_asyncio
+from pymongo import UpdateOne
 
  #===== CONFIGURATION =====
 API_ID = os.environ.get("API_ID")
 API_HASH = os.environ.get("API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+MONGO_URI = os.environ.get("MONGO_URI", "")
 DOWNLOAD_DIR = tempfile.mkdtemp(prefix="dl_")
-UID_DIR = "./uids/"
-os.makedirs(UID_DIR, exist_ok=True)
-uid_path = os.path.join(UID_DIR, "users.txt")
 ADMIN_IDS = [7728700576, 7753358925]
+
+if MONGO_URI:
+    mongo_client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URI)
+    db = mongo_client.get_default_database("file_downloader_bot")
+    users_col = db["users"]
+else:
+    mongo_client = None
+    db = None
+    users_col = None
 
 admin_states = {}
 # ===== LOGGING =====
@@ -50,46 +59,133 @@ class DownloadBot:
         self.setup_handlers()
     
     # ===== HELPER FUNCTIONS =====
-    def save_user_data(self, user_id, username, first_name, last_name):
+    async def save_user_data(self, user_id, username, first_name, last_name):
+        if users_col is None:
+            logger.warning("MongoDB not configured. User not saved.")
+            return
         username = str(username) if username else "No_Username"
-        first_name = str(first_name).replace(",", "")
+        first_name = str(first_name).replace(",", "") if first_name else ""
         last_name = (str(last_name) if last_name else "").replace(",", "")
-        exists = False
         try:
-            with open(uid_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    if line.startswith(f"{user_id},"):
-                        exists = True
-                        break
-        except FileNotFoundError:
-            pass
-        if not exists:
-            with open(uid_path, "a", encoding="utf-8") as f:
-                f.write(f"{user_id}, {username}, {first_name} {last_name}\n")
+            await users_col.update_one(
+                {"_id": int(user_id)},
+                {
+                    "$set": {
+                        "_id": int(user_id),
+                        "username": username,
+                        "first_name": first_name,
+                        "last_name": last_name,
+                        "updated_at": datetime.utcnow()
+                    }
+                },
+                upsert=True
+            )
+        except Exception as e:
+            logger.error(f"Error saving user to MongoDB: {e}")
 
-    
-    def count_users(self):
-        with open(uid_path, "r") as f:
-            return len(f.readlines())
+    async def count_users(self):
+        if users_col is None:
+            return 0
+        try:
+            return await users_col.count_documents({})
+        except Exception as e:
+            logger.error(f"Error counting users: {e}")
+            return 0
 
-    def get_all_ids(self):
+    async def get_all_ids(self):
+        if users_col is None:
+            return []
         ids = []
         try:
-            with open(uid_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    # Split by comma and take the first item (the ID)
-                    user_id = line.strip().split(",")[0]
-                    if user_id:
-                        ids.append(int(user_id))
-        except FileNotFoundError:
-            print("No users found yet.")
+            cursor = users_col.find({}, {"_id": 1})
+            async for doc in cursor:
+                ids.append(int(doc["_id"]))
+        except Exception as e:
+            logger.error(f"Error fetching user IDs: {e}")
         return ids
 
-    def admin_message(self):
+    async def export_users_file(self) -> Optional[str]:
+        if users_col is None:
+            return None
+        temp_dir = tempfile.mkdtemp()
+        file_path = os.path.join(temp_dir, "users.txt")
         try:
-            bot_status_txt = (f"Total users: {self.count_users()}")
-        except:
-            bot_status_txt = "No User ID saved in the server. Users have not sent /start yet after updating the bot."
+            cursor = users_col.find({})
+            count = 0
+            with open(file_path, "w", encoding="utf-8") as f:
+                async for doc in cursor:
+                    uid = doc.get("_id")
+                    username = doc.get("username", "No_Username")
+                    first_name = doc.get("first_name", "")
+                    last_name = doc.get("last_name", "")
+                    name_str = f"{first_name} {last_name}".strip()
+                    f.write(f"{uid}, {username}, {name_str}\n")
+                    count += 1
+            if count == 0:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                try:
+                    os.rmdir(temp_dir)
+                except Exception:
+                    pass
+                return None
+            return file_path
+        except Exception as e:
+            logger.error(f"Error exporting users to file: {e}")
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            try:
+                os.rmdir(temp_dir)
+            except Exception:
+                pass
+            return None
+
+    async def import_users_from_file(self, file_path: str) -> Tuple[int, int]:
+        if users_col is None or not os.path.exists(file_path):
+            return 0, 0
+        operations = []
+        total_lines = 0
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parts = [p.strip() for p in line.split(",")]
+                    try:
+                        uid = int(parts[0])
+                    except (ValueError, IndexError):
+                        continue
+                    doc = {
+                        "_id": uid,
+                        "updated_at": datetime.utcnow()
+                    }
+                    if len(parts) > 1 and parts[1]:
+                        doc["username"] = parts[1]
+                    if len(parts) > 2 and parts[2]:
+                        name_parts = parts[2].split(" ", 1)
+                        doc["first_name"] = name_parts[0]
+                        if len(name_parts) > 1:
+                            doc["last_name"] = name_parts[1]
+                    operations.append(UpdateOne({"_id": uid}, {"$set": doc}, upsert=True))
+                    total_lines += 1
+
+            if operations:
+                chunk_size = 1000
+                for i in range(0, len(operations), chunk_size):
+                    chunk = operations[i:i + chunk_size]
+                    await users_col.bulk_write(chunk, ordered=False)
+            return len(operations), total_lines
+        except Exception as e:
+            logger.error(f"Error importing users from file: {e}")
+            return 0, total_lines
+
+    async def admin_message(self):
+        try:
+            user_count = await self.count_users()
+            bot_status_txt = f"Total users: {user_count}"
+        except Exception:
+            bot_status_txt = "Error retrieving user count from MongoDB."
         reply_markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("📢 Broadcast", callback_data="ask_broadcast")],
             [InlineKeyboardButton("🆔 Get all IDs", callback_data="get_ids")],
@@ -191,12 +287,13 @@ class DownloadBot:
         return f"{size:.2f} {units[i]}"
     # ===== COMMAND HANDLERS =====
     async def admin_command(self, client, message: Message):
-        bot_status_txt, reply_markup = self.admin_message()
+        bot_status_txt, reply_markup = await self.admin_message()
         await message.reply_text(bot_status_txt, reply_markup=reply_markup)
 
     async def start_command(self, client: Client, message: Message):
         user = message.from_user
-        self.save_user_data(
+        if user:
+            await self.save_user_data(
                 user.id, 
                 user.username, 
                 user.first_name, 
@@ -205,7 +302,7 @@ class DownloadBot:
         text = f"""
 🚀 **High-Speed Download Bot (2GB Limit)**
 
-Hey {user.first_name}! I can download files up to **2GB** using Telegram's native API!
+Hey {user.first_name if user else 'there'}! I can download files up to **2GB** using Telegram's native API!
 
 **Features:**
 • Download files up to **2GB** (50x bigger than normal bots)
@@ -368,11 +465,11 @@ Ready to download your files!
     
     async def handle_msg(self, client: Client, message: Message):
         if "admin_action" in admin_states and admin_states["admin_action"] == "waiting_for_msg":
-            del admin_states["admin_action"]
-            if not os.path.exists(uid_path):
-                await message.reply_text("No users to broadcast to.")
+            admin_states.pop("admin_action", None)
+            users = await self.get_all_ids()
+            if not users:
+                await message.reply_text("No users found in database to broadcast to.")
                 return
-            users = self.get_all_ids()
             status = await message.reply_text(f"🚀 Sending to {len(users)} users...")
             success = 0
             failed = 0
@@ -557,7 +654,7 @@ Ready to download your files!
         
         @self.app.on_callback_query()
         async def handle_buttons(client, cb):
-            bot_status_txt, reply_markup = self.admin_message()
+            bot_status_txt, reply_markup = await self.admin_message()
             if cb.data == "refresh_stats":
                 try:
                     await cb.edit_message_text(bot_status_txt, reply_markup=reply_markup)
@@ -565,15 +662,25 @@ Ready to download your files!
                 except:
                     await cb.answer("No updates yet!")
             elif cb.data == "get_ids":
-                await cb.answer()
-                if os.path.exists(uid_path):
-                    await cb.message.reply_document(uid_path, caption="Here is the current user list.")
+                await cb.answer("Exporting users from database...")
+                file_path = await self.export_users_file()
+                if file_path and os.path.exists(file_path):
+                    try:
+                        await cb.message.reply_document(file_path, caption="Here is the current user list from MongoDB.")
+                    finally:
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                            temp_dir = os.path.dirname(file_path)
+                            try:
+                                os.rmdir(temp_dir)
+                            except Exception:
+                                pass
                 else:
-                    await cb.answer("File not found!", show_alert=True)
+                    await cb.message.reply_text("❌ No users found in database.")
             elif cb.data == "update_users":
                 admin_states["admin_action"] = "waiting_for_file"
                 await cb.edit_message_text(
-                    "📤 **Update User List**\n\nPlease send me a new `.txt` file containing the User IDs (one per line).",
+                    "📤 **Update User List**\n\nPlease send me a `.txt` file containing User IDs (one ID per line or `id, username, name`).",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel")]])
                 )
             elif cb.data == "ask_broadcast":
@@ -585,7 +692,7 @@ Ready to download your files!
                 )
             elif cb.data == "cancel":
                 await cb.answer()
-                del admin_states["admin_action"]
+                admin_states.pop("admin_action", None)
                 await cb.edit_message_text(bot_status_txt, reply_markup=reply_markup)
 
         @self.app.on_message(filters.private)
@@ -594,10 +701,25 @@ Ready to download your files!
             if not state:
                 return
             if state == "waiting_for_file":
+                if message.from_user.id not in ADMIN_IDS:
+                    return
                 if message.document and message.document.file_name.endswith(".txt"):
-                    await message.download(file_name=uid_path)
-                    admin_states["admin_action"] = None
-                    await message.reply_text("✅ `users.txt` has been updated successfully!")
+                    status = await message.reply_text("⏳ Processing and updating MongoDB...")
+                    temp_txt = tempfile.mktemp(suffix=".txt")
+                    try:
+                        await message.download(file_name=temp_txt)
+                        count, total_lines = await self.import_users_from_file(temp_txt)
+                        admin_states.pop("admin_action", None)
+                        await status.edit_text(f"✅ Successfully updated {count} users in MongoDB!")
+                    except Exception as e:
+                        logger.error(f"Error during file update: {e}")
+                        await status.edit_text(f"❌ Failed to update users: {e}")
+                    finally:
+                        if os.path.exists(temp_txt):
+                            try:
+                                os.remove(temp_txt)
+                            except Exception:
+                                pass
                 else:
                     await message.reply_text("❌ Please send a valid `.txt` file.")
                 return
