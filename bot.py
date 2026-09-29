@@ -16,7 +16,7 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import FloodWait
 import motor.motor_asyncio
-from pymongo import UpdateOne
+
 
  #===== CONFIGURATION =====
 API_ID = os.environ.get("API_ID")
@@ -104,81 +104,21 @@ class DownloadBot:
             logger.error(f"Error fetching user IDs: {e}")
         return ids
 
-    async def export_users_file(self) -> Optional[str]:
+    async def get_users_list(self, page: int = 1, per_page: int = 10):
         if users_col is None:
-            return None
-        temp_dir = tempfile.mkdtemp()
-        file_path = os.path.join(temp_dir, "users.txt")
+            return [], 0, 0
         try:
-            cursor = users_col.find({})
-            count = 0
-            with open(file_path, "w", encoding="utf-8") as f:
-                async for doc in cursor:
-                    uid = doc.get("_id")
-                    username = doc.get("username", "No_Username")
-                    first_name = doc.get("first_name", "")
-                    last_name = doc.get("last_name", "")
-                    name_str = f"{first_name} {last_name}".strip()
-                    f.write(f"{uid}, {username}, {name_str}\n")
-                    count += 1
-            if count == 0:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                try:
-                    os.rmdir(temp_dir)
-                except Exception:
-                    pass
-                return None
-            return file_path
+            total = await users_col.count_documents({})
+            total_pages = math.ceil(total / per_page) if total > 0 else 1
+            skip = (page - 1) * per_page
+            cursor = users_col.find({}).skip(skip).limit(per_page)
+            users = []
+            async for doc in cursor:
+                users.append(doc)
+            return users, total, total_pages
         except Exception as e:
-            logger.error(f"Error exporting users to file: {e}")
-            if os.path.exists(file_path):
-                os.remove(file_path)
-            try:
-                os.rmdir(temp_dir)
-            except Exception:
-                pass
-            return None
-
-    async def import_users_from_file(self, file_path: str) -> Tuple[int, int]:
-        if users_col is None or not os.path.exists(file_path):
-            return 0, 0
-        operations = []
-        total_lines = 0
-        try:
-            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    parts = [p.strip() for p in line.split(",")]
-                    try:
-                        uid = int(parts[0])
-                    except (ValueError, IndexError):
-                        continue
-                    doc = {
-                        "_id": uid,
-                        "updated_at": datetime.utcnow()
-                    }
-                    if len(parts) > 1 and parts[1]:
-                        doc["username"] = parts[1]
-                    if len(parts) > 2 and parts[2]:
-                        name_parts = parts[2].split(" ", 1)
-                        doc["first_name"] = name_parts[0]
-                        if len(name_parts) > 1:
-                            doc["last_name"] = name_parts[1]
-                    operations.append(UpdateOne({"_id": uid}, {"$set": doc}, upsert=True))
-                    total_lines += 1
-
-            if operations:
-                chunk_size = 1000
-                for i in range(0, len(operations), chunk_size):
-                    chunk = operations[i:i + chunk_size]
-                    await users_col.bulk_write(chunk, ordered=False)
-            return len(operations), total_lines
-        except Exception as e:
-            logger.error(f"Error importing users from file: {e}")
-            return 0, total_lines
+            logger.error(f"Error fetching users list: {e}")
+            return [], 0, 0
 
     async def admin_message(self):
         try:
@@ -188,8 +128,7 @@ class DownloadBot:
             bot_status_txt = "Error retrieving user count from MongoDB."
         reply_markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("📢 Broadcast", callback_data="ask_broadcast")],
-            [InlineKeyboardButton("🆔 Get all IDs", callback_data="get_ids")],
-            [InlineKeyboardButton("📝 Update users.txt", callback_data="update_users")],
+            [InlineKeyboardButton("👥 Users List", callback_data="users_list_1")],
             [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_stats")]
         ])
         return bot_status_txt, reply_markup
@@ -661,28 +600,36 @@ Ready to download your files!
                     await cb.answer("Refreshed!")
                 except:
                     await cb.answer("No updates yet!")
-            elif cb.data == "get_ids":
-                await cb.answer("Exporting users from database...")
-                file_path = await self.export_users_file()
-                if file_path and os.path.exists(file_path):
-                    try:
-                        await cb.message.reply_document(file_path, caption="Here is the current user list from MongoDB.")
-                    finally:
-                        if os.path.exists(file_path):
-                            os.remove(file_path)
-                            temp_dir = os.path.dirname(file_path)
-                            try:
-                                os.rmdir(temp_dir)
-                            except Exception:
-                                pass
-                else:
+            elif cb.data.startswith("users_list_"):
+                page = int(cb.data.split("_")[-1])
+                await cb.answer()
+                users, total, total_pages = await self.get_users_list(page=page)
+                if not users:
                     await cb.message.reply_text("❌ No users found in database.")
-            elif cb.data == "update_users":
-                admin_states["admin_action"] = "waiting_for_file"
-                await cb.edit_message_text(
-                    "📤 **Update User List**\n\nPlease send me a `.txt` file containing User IDs (one ID per line or `id, username, name`).",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel")]])
-                )
+                    return
+                text = f"👥 **Users List** (Page {page}/{total_pages})\n"
+                text += f"📊 Total: {total} users\n\n"
+                for i, doc in enumerate(users, start=(page - 1) * 10 + 1):
+                    uid = doc.get("_id")
+                    username = doc.get("username", "No_Username")
+                    first_name = doc.get("first_name", "")
+                    last_name = doc.get("last_name", "")
+                    name = f"{first_name} {last_name}".strip() or "N/A"
+                    uname = f"@{username}" if username != "No_Username" else "No_Username"
+                    text += f"{i}. `{uid}` | {uname} | {name}\n"
+                nav_buttons = []
+                if page > 1:
+                    nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"users_list_{page - 1}"))
+                if page < total_pages:
+                    nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"users_list_{page + 1}"))
+                buttons = []
+                if nav_buttons:
+                    buttons.append(nav_buttons)
+                buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_admin")])
+                await cb.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+            elif cb.data == "back_to_admin":
+                await cb.answer()
+                await cb.edit_message_text(bot_status_txt, reply_markup=reply_markup)
             elif cb.data == "ask_broadcast":
                 await cb.answer()
                 admin_states["admin_action"] = "waiting_for_msg"
@@ -697,32 +644,7 @@ Ready to download your files!
 
         @self.app.on_message(filters.private)
         async def admin_input_handler(client, message):
-            state = admin_states.get("admin_action")
-            if not state:
-                return
-            if state == "waiting_for_file":
-                if message.from_user.id not in ADMIN_IDS:
-                    return
-                if message.document and message.document.file_name.endswith(".txt"):
-                    status = await message.reply_text("⏳ Processing and updating MongoDB...")
-                    temp_txt = tempfile.mktemp(suffix=".txt")
-                    try:
-                        await message.download(file_name=temp_txt)
-                        count, total_lines = await self.import_users_from_file(temp_txt)
-                        admin_states.pop("admin_action", None)
-                        await status.edit_text(f"✅ Successfully updated {count} users in MongoDB!")
-                    except Exception as e:
-                        logger.error(f"Error during file update: {e}")
-                        await status.edit_text(f"❌ Failed to update users: {e}")
-                    finally:
-                        if os.path.exists(temp_txt):
-                            try:
-                                os.remove(temp_txt)
-                            except Exception:
-                                pass
-                else:
-                    await message.reply_text("❌ Please send a valid `.txt` file.")
-                return
+            pass
 
     async def health_check(self, request):
         return web.Response(text="Bot is running!", status=200)
