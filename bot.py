@@ -402,173 +402,160 @@ Ready to download your files!
         await status_msg.delete()
         return True
     
-    async def handle_msg(self, client: Client, message: Message):
-        if "admin_action" in admin_states and admin_states["admin_action"] == "waiting_for_msg":
-            admin_states.pop("admin_action", None)
-            users = await self.get_all_ids()
-            if not users:
-                await message.reply_text("No users found in database to broadcast to.")
-                return
-            status = await message.reply_text(f"🚀 Sending to {len(users)} users...")
-            success = 0
-            failed = 0
-            for uid in users:
-                try:
-                    await message.copy(chat_id=int(uid))
-                    success += 1
-                    await asyncio.sleep(0.05)
-                except:
-                    failed += 1
-            user_s = "users" if success > 1 else "user"
-            fail_msg = f"\n❌ Failed {failed}" if failed > 0 else ""
-            await status.edit_text(f"✅ **Broadcast Done**\nSent to {success} {user_s}.{fail_msg}")
-        else:
-            user_id = message.from_user.id
-            url = message.text.strip()
-            
-            # Check URL format
-            if not (url.startswith('http://') or url.startswith('https://')):
-                await message.reply_text("❌ Please send a valid HTTP/HTTPS link")
-                return
-            
-            # Check if already downloading
-            if user_id in self.active_downloads:
-                await message.reply_text("⏳ You have a download in progress. Please wait...")
-                return
-            
-            # Get file info
-            status_msg = await message.reply_text("🔍 Analyzing URL...")
-            file_size, content_type, headers = self.get_file_info(url)
-            
-            if file_size is None:
-                await status_msg.edit_text("❌ Cannot access file. Invalid URL or server blocked.")
-                return
-            
-            # Check size limit (2GB)
-            if file_size > self.MAX_FILE_SIZE:
-                await status_msg.edit_text(
-                    f"❌ File too large: {self.format_size(file_size)}\n"
-                    f"Limit: {self.format_size(self.MAX_FILE_SIZE)}"
-                )
-                return
-            
-            # Get filename
-            filename = self.extract_filename(url, content_type, headers)
-            size_readable = self.format_size(file_size)
-            
-            # Confirm download
-            await status_msg.edit_text(
-                f"📄 **File Info**\n"
-                f"**Name:** `{filename}`\n"
-                f"**Size:** {size_readable}\n\n"
-            )
-            
-            # Download file
-            filepath = os.path.join(DOWNLOAD_DIR, filename)
-            self.active_downloads[user_id] = filename
-            
-            success = await self.download_file(url, filepath, message, filename, user_id)
-            
-            if not success:
-                if user_id in self.active_downloads:
-                    del self.active_downloads[user_id]
-                return
-    
-            upload_start = time.time()
-            upload_msg = await message.reply_text("📤 Preparing to upload...")
-            
+    async def broadcast_message(self, message: Message):
+        admin_states.pop("admin_action", None)
+        users = await self.get_all_ids()
+        if not users:
+            await message.reply_text("No users found in database to broadcast to.")
+            return
+        status = await message.reply_text(f"🚀 Sending to {len(users)} users...")
+        success = 0
+        failed = 0
+        for uid in users:
             try:
-                # Get file stats
-                file_stat = os.stat(filepath)
-                file_size = file_stat.st_size
-                
-                # Track uploaded bytes manually if needed, or use callback
-                uploaded_bytes = 0
-                
-                # Define a wrapper callback that tracks total uploaded
-                async def upload_callback(current, total, *args):
-                    nonlocal uploaded_bytes
-                    uploaded_bytes = current
-                    await self.show_progress(
-                        current=current,
-                        total=total,
-                        message=upload_msg,
-                        filename=filename,
-                        start_time=upload_start,
-                        action="Uploading"
-                    )
-                
-                # Determine file type and send with progress callback
-                ext = os.path.splitext(filename)[1].lower()
-                
-                if ext in ['.mp4', '.avi', '.mkv', '.mov', '.webm']:
-                    await message.reply_video(
-                        video=filepath,
-                        caption=f"🎬 `{filename}`",
-                        progress=upload_callback,  # Use wrapper callback
-                        progress_args=(file_size,)  # Pyrogram passes current,total
-                    )
-                elif ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
-                    await message.reply_photo(
-                        photo=filepath,
-                        caption=f"🖼️ `{filename}`",
-                        progress=upload_callback,
-                        progress_args=(file_size,)
-                    )
-                elif ext in ['.mp3', '.wav', '.ogg', '.flac']:
-                    await message.reply_audio(
-                        audio=filepath,
-                        caption=f"🎵 `{filename}`",
-                        progress=upload_callback,
-                        progress_args=(file_size,)
-                    )
-                else:
-                    await message.reply_document(
-                        document=filepath,
-                        caption=f"📁 `{filename}`",
-                        progress=upload_callback,
-                        progress_args=(file_size,)
-                    )
-                
-                upload_time = time.time() - upload_start
-                
-                # Calculate upload speed
-                if upload_time > 0 and file_size > 0:
-                    upload_speed = file_size / upload_time
-                    upload_speed_str = self.humanbytes(upload_speed) + "/s"
-                else:
-                    upload_speed_str = "N/A"
-                
-                # Store upload stats
-                self.upload_stats[user_id] = {
-                    'time': upload_time,
-                    'speed': upload_speed_str,
-                    'size': file_size
-                }
-                
-                # Get download stats
-                download_stats = self.download_stats.get(user_id, {})
-                download_time_str = f"{download_stats.get('time', 0):.1f}s" if download_stats else "N/A"
-                download_speed_str = download_stats.get('speed', 'N/A')
-                
-                # Show final completion message with BOTH speeds
-                await upload_msg.edit_text(
-                    f"✅ **Complete!**\n"
-                    f"📥 Download: {download_time_str} - {download_speed_str}\n"
-                    f"📤 Upload: {upload_time:.1f}s - {upload_speed_str}\n"
-                )
-                
-            except Exception as e:
-                logger.error(f"Upload error: {e}")
-                await upload_msg.edit_text(f"❌ Upload failed: {str(e)[:100]}")
-            
-            # Cleanup
+                await message.copy(chat_id=int(uid))
+                success += 1
+                await asyncio.sleep(0.05)
+            except:
+                failed += 1
+        user_s = "users" if success > 1 else "user"
+        fail_msg = f"\n❌ Failed {failed}" if failed > 0 else ""
+        await status.edit_text(f"✅ **Broadcast Done**\nSent to {success} {user_s}.{fail_msg}")
+
+    async def handle_msg(self, client: Client, message: Message):
+        if admin_states.get("admin_action") == "waiting_for_msg" and message.from_user.id in ADMIN_IDS:
+            await self.broadcast_message(message)
+            return
+
+        user_id = message.from_user.id
+        url = message.text.strip()
+
+        if not (url.startswith('http://') or url.startswith('https://')):
+            await message.reply_text("❌ Please send a valid HTTP/HTTPS link")
+            return
+
+        if user_id in self.active_downloads:
+            await message.reply_text("⏳ You have a download in progress. Please wait...")
+            return
+
+        status_msg = await message.reply_text("🔍 Analyzing URL...")
+        file_size, content_type, headers = self.get_file_info(url)
+
+        if file_size is None:
+            await status_msg.edit_text("❌ Cannot access file. Invalid URL or server blocked.")
+            return
+
+        if file_size > self.MAX_FILE_SIZE:
+            await status_msg.edit_text(
+                f"❌ File too large: {self.format_size(file_size)}\n"
+                f"Limit: {self.format_size(self.MAX_FILE_SIZE)}"
+            )
+            return
+
+        filename = self.extract_filename(url, content_type, headers)
+        size_readable = self.format_size(file_size)
+
+        await status_msg.edit_text(
+            f"📄 **File Info**\n"
+            f"**Name:** `{filename}`\n"
+            f"**Size:** {size_readable}\n\n"
+        )
+
+        filepath = os.path.join(DOWNLOAD_DIR, filename)
+        self.active_downloads[user_id] = filename
+
+        success = await self.download_file(url, filepath, message, filename, user_id)
+
+        if not success:
             if user_id in self.active_downloads:
                 del self.active_downloads[user_id]
-            if user_id in self.download_stats:
-                del self.download_stats[user_id]
-            if os.path.exists(filepath):
-                os.remove(filepath)
+            return
+
+        upload_start = time.time()
+        upload_msg = await message.reply_text("📤 Preparing to upload...")
+
+        try:
+            file_stat = os.stat(filepath)
+            file_size = file_stat.st_size
+            uploaded_bytes = 0
+
+            async def upload_callback(current, total, *args):
+                nonlocal uploaded_bytes
+                uploaded_bytes = current
+                await self.show_progress(
+                    current=current,
+                    total=total,
+                    message=upload_msg,
+                    filename=filename,
+                    start_time=upload_start,
+                    action="Uploading"
+                )
+
+            ext = os.path.splitext(filename)[1].lower()
+
+            if ext in ['.mp4', '.avi', '.mkv', '.mov', '.webm']:
+                await message.reply_video(
+                    video=filepath,
+                    caption=f"🎬 `{filename}`",
+                    progress=upload_callback,
+                    progress_args=(file_size,)
+                )
+            elif ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
+                await message.reply_photo(
+                    photo=filepath,
+                    caption=f"🖼️ `{filename}`",
+                    progress=upload_callback,
+                    progress_args=(file_size,)
+                )
+            elif ext in ['.mp3', '.wav', '.ogg', '.flac']:
+                await message.reply_audio(
+                    audio=filepath,
+                    caption=f"🎵 `{filename}`",
+                    progress=upload_callback,
+                    progress_args=(file_size,)
+                )
+            else:
+                await message.reply_document(
+                    document=filepath,
+                    caption=f"📁 `{filename}`",
+                    progress=upload_callback,
+                    progress_args=(file_size,)
+                )
+
+            upload_time = time.time() - upload_start
+
+            if upload_time > 0 and file_size > 0:
+                upload_speed = file_size / upload_time
+                upload_speed_str = self.humanbytes(upload_speed) + "/s"
+            else:
+                upload_speed_str = "N/A"
+
+            self.upload_stats[user_id] = {
+                'time': upload_time,
+                'speed': upload_speed_str,
+                'size': file_size
+            }
+
+            download_stats = self.download_stats.get(user_id, {})
+            download_time_str = f"{download_stats.get('time', 0):.1f}s" if download_stats else "N/A"
+            download_speed_str = download_stats.get('speed', 'N/A')
+
+            await upload_msg.edit_text(
+                f"✅ **Complete!**\n"
+                f"📥 Download: {download_time_str} - {download_speed_str}\n"
+                f"📤 Upload: {upload_time:.1f}s - {upload_speed_str}\n"
+            )
+
+        except Exception as e:
+            logger.error(f"Upload error: {e}")
+            await upload_msg.edit_text(f"❌ Upload failed: {str(e)[:100]}")
+
+        if user_id in self.active_downloads:
+            del self.active_downloads[user_id]
+        if user_id in self.download_stats:
+            del self.download_stats[user_id]
+        if os.path.exists(filepath):
+            os.remove(filepath)
     
     def setup_handlers(self):
         @self.app.on_message(filters.command("admin") & filters.user(ADMIN_IDS))
@@ -644,7 +631,10 @@ Ready to download your files!
 
         @self.app.on_message(filters.private)
         async def admin_input_handler(client, message):
-            pass
+            if message.from_user.id not in ADMIN_IDS:
+                return
+            if admin_states.get("admin_action") == "waiting_for_msg":
+                await self.broadcast_message(message)
 
     async def health_check(self, request):
         return web.Response(text="Bot is running!", status=200)
